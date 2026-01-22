@@ -54,7 +54,7 @@ wheels = [
 [[package]]
 name = "nuage-cli"
 version = "0.1.0"
-source = { virtual = "packages/nuage_cli" }
+source = { editable = "packages/nuage_cli" }
 dependencies = [
     { name = "typer" },
 ]
