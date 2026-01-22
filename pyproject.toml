@@ -1,0 +1,10 @@
+[project]
+name = "nuagedev-workspace"
+version = "0.1.0"
+requires-python = ">=3.10"
+
+[tool.uv.workspace]
+members = [
+  "packages/nuage_cli",
+  "packages/nuage_extensions"
+]
