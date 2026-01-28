@@ -1,4 +1,0 @@
-[project]
-name = "nuage-extensions"
-version = "0.1.0"
-description = "Nuage extensions for Nuage CLI"
