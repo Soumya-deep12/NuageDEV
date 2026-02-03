@@ -10,4 +10,7 @@ def start_tmux(session_name: str, path: Path):
 
 
 def start_editor(editor: str, path: Path):
-    subprocess.Popen([editor, str(path)])
+    try:
+        subprocess.Popen([editor, str(path)])
+    except FileNotFoundError:
+        print(f"Editor command not found: {editor}")

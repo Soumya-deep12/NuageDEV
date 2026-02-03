@@ -64,15 +64,11 @@ name = "nuage"
 version = "0.1.0"
 source = { editable = "packages/cli" }
 dependencies = [
-    { name = "rich" },
     { name = "typer" },
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "rich", specifier = ">=13.0.0" },
-    { name = "typer", specifier = ">=0.12.0" },
-]
+requires-dist = [{ name = "typer", specifier = ">=0.12.0" }]
 
 [[package]]
 name = "nuagedev-workspace"
