@@ -13,6 +13,7 @@ venv/
 # uv
 .uv/
 uv.lock
+.env
 
 # IDEs
 .vscode/
