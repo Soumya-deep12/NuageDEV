@@ -10,7 +10,7 @@ def fetch_issues(base_url: str, api_key: str, params: dict) -> list[dict]:
             response.raise_for_status()
             return response.json().get("issues", [])
     except Exception as e:
-        print(f"⚠️ Redmine Error: {e}")
+        print(f"Redmine Error: {e}")
         return []
 
 def get_today_issues(url: str, key: str):

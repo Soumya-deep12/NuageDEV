@@ -10,4 +10,4 @@ def start_editor(editor: str, path: Path):
         # Non-blocking: starts the editor and lets the script continue to tmux
         subprocess.Popen([editor, str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except FileNotFoundError:
-        print(f"❌ Error: Editor '{editor}' not found in your $PATH.")
+        print(f"Error: Editor '{editor}' not found in your $PATH.")
