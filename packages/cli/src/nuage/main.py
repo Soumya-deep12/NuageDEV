@@ -102,7 +102,7 @@ def review_list(base: str = "main"):
     result = subprocess.run(cmd, capture_output=True, text=True)
     
     if not result.stdout.strip():
-        typer.secho("No patch as of now")
+        typer.secho("No patch as of nowwww")
         return
 
     typer.secho(f"Pending Patches (Commits) to Review:", fg="blue", bold=True)
