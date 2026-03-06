@@ -7,6 +7,7 @@ dependencies = [
     "typer>=0.12.0",
     "httpx>=0.28.1",
     "python-dotenv>=1.0.1",
+    "ipdb>=0.13.13",
 ]
 
 [project.scripts]

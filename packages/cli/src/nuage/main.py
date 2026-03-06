@@ -12,12 +12,19 @@ def setup(path: str = "."):
     p_path = Path(path).resolve()
     name = typer.prompt("Project name", default=p_path.name)
     editor = typer.prompt("Editor command (code, nvim, emacs)", default="code")
-    
+
     typer.echo("\n--- Redmine (Optional - Press Enter to skip) ---")
     url = typer.prompt("Redmine URL", default="", show_default=False)
     key = typer.prompt("API Key", default="", hide_input=True, show_default=False) if url else None
 
-    config.save_config(p_path, name, editor, url or None, key or None)
+    config.save_config(p_path, name, editor, url or None)
+
+    if url and key:
+        env_path = p_path / ".env"
+        with open(env_path, "a") as f:
+            f.write(f"\nREDMINE_API_KEY={key}\n")
+        typer.secho(f"  [✓] Saved API key securely to {env_path.name}", fg=typer.colors.GREEN)
+
     typer.echo(f"Nuage setup complete for {name}!")
 
 @app.command()
@@ -33,31 +40,90 @@ def go():
     launcher.start_tmux(conf["project"]["name"], p_path)
 
 @app.command()
-def items():
+def redmine_items():
     """List project tasks from Redmine."""
     cwd = Path.cwd()
     conf = config.load_config(cwd)
-    env.ensure_env(cwd)
 
     if not conf or "redmine" not in conf:
         typer.echo("Redmine not configured for this project.")
         return
 
+    # Load .env from the project root, not from wherever the user runs nuage
+    project_root = Path(conf["project"]["path"])
+    env.ensure_env(project_root)
+
     url = conf["redmine"]["url"]
-    api_key = conf["redmine"].get("api_key") or env.get_redmine_api_key()
+    api_key = env.get_redmine_api_key()
 
     if not api_key:
-        typer.secho("Redmine URL found but no API Key found in config or .env", fg=typer.colors.RED)
+        typer.secho("Redmine URL found but no API Key found in .env", fg=typer.colors.RED)
         return
 
     overdue = redmine.get_overdue_issues(url, api_key)
     today = redmine.get_today_issues(url, api_key)
+
+    if overdue is None or today is None:
+        typer.secho("\n  [!] Could not connect to Redmine server.", fg=typer.colors.RED, bold=True)
+        return
 
     typer.secho(f"\n TASKS: {conf['project']['name']}", bold=True, underline=True)
     for issue in overdue:
         typer.echo(f"  [RED] #{issue['id']} {issue['subject']} (OVERDUE)")
     for issue in today:
         typer.echo(f"  [GRN] #{issue['id']} {issue['subject']} (TODAY)")
+
+@app.command()
+def redmine_list():
+    """List all project tasks for all team members."""
+    cwd = Path.cwd()
+    conf = config.load_config(cwd)
+
+    if not conf or "redmine" not in conf:
+        typer.echo("Redmine not configured for this project.")
+        return
+
+    # Load .env from the project root, not from wherever the user runs nuage
+    project_root = Path(conf["project"]["path"])
+    env.ensure_env(project_root)
+
+    url = conf["redmine"]["url"]
+    api_key = env.get_redmine_api_key()
+
+    if not api_key:
+        typer.secho("Redmine URL found but no API Key found in .env", fg=typer.colors.RED)
+        return
+
+    all_issues = redmine.get_all_issues(url, api_key)
+
+    # Always print the header table regardless of whether tasks exist
+    typer.secho(f"\n ALL TEAM TASKS: {conf['project']['name']}", bold=True, underline=True)
+    header = f"  {'ID':<8} | {'Assignee':<20} | {'Status':<15} | {'Subject'}"
+    typer.echo("  " + "-" * (len(header) - 2))
+    typer.echo(header)
+    typer.echo("  " + "-" * (len(header) - 2))
+
+    if all_issues is None:
+        typer.secho("  [!] Connection failed. Data could not be retrieved.", fg=typer.colors.RED)
+        return
+
+    if not all_issues:
+        typer.secho("  (no open tasks found)", fg=typer.colors.GREEN)
+        return
+
+    for issue in all_issues:
+        assignee_data = issue.get("assigned_to")
+        assignee_name = assignee_data.get("name") if assignee_data else "Unassigned"
+        status = issue.get('status', {}).get('name', 'Unknown')
+        issue_id = f"#{issue['id']}"
+
+        color = "white"
+        if "In Progress" in status: color = "green"
+        if "Feedback" in status: color = "yellow"
+        if "Closed" in status or "Rejected" in status: color = "red"
+
+        row = f"  {issue_id:<8} | {assignee_name:<20} | {typer.style(f'{status:<15}', fg=color)} | {issue['subject']}"
+        typer.echo(row)
 
 @app.command()
 def review(target: str = typer.Argument(None), base: str = "main"):
@@ -110,121 +176,109 @@ def review_list(base: str = "main"):
     for i, commit in enumerate(commits, 1):
         typer.echo(f" {i}. {commit}")
 
-@app.command()
-def review_prior():
-    """Lists uncommitted changes prior to commit."""
-
-    cmd = ["git", "status", "--short"]
-    try:
-        # Avoid shell=True for security. capture_output=True is safe here.
-        result = subprocess.run(
-            cmd, 
-            capture_output=True, 
-            text=True, 
-            check=True
-        )
-    except subprocess.CalledProcessError as e:
-        typer.secho(f"Failed to run git command: {e}", fg="red")
-        return
-    except FileNotFoundError:
-        typer.secho("Git executable not found. Please install git.", fg="red")
-        return
-    
-    if not result.stdout.strip():
-        typer.secho("No uncommitted changes as of now")
-        return
-
-    typer.secho("Pending Changes to Review (Pre-commit):", fg="yellow", bold=True)
-    changes = result.stdout.strip().split('\n')
-    for i, change in enumerate(changes, 1):
-        # Additional safety/formatting check to prevent completely malformed output
-        if change:
-            typer.echo(f" {i}. {change}")
 
 @app.command()
-def land(target: str = typer.Argument("master")):
-    """Squash local commits and safely push to the target branch."""
-    
-    # Step 1: Strict Check for uncommitted changes
-    status_cmd = ["git", "status", "--porcelain"]
-    status_result = subprocess.run(status_cmd, capture_output=True, text=True)
-    if status_result.stdout.strip():
-        typer.secho("Working directory is not clean. Commit or stash changes before landing.", fg="red")
+def update(issue_id: int = typer.Argument(None)):
+    """Update the status of a Redmine issue"""
+    cwd = Path.cwd()
+    env.ensure_env(cwd)
+    conf = config.load_config(cwd)
+
+    if not conf or "redmine" not in conf:
+        typer.secho("Redmine not configured for this project.", fg=typer.colors.RED)
         raise typer.Exit(1)
 
-    # Get current branch
-    branch_cmd = ["git", "rev-parse", "--abbrev-ref", "HEAD"]
-    branch_result = subprocess.run(branch_cmd, capture_output=True, text=True, check=True)
-    current_branch = branch_result.stdout.strip()
-    
-    if current_branch == target:
-        typer.secho(f"You cannot land the {target} branch onto itself.", fg="red")
+    url = conf["redmine"]["url"]
+
+    # Load .env from the project root, not from wherever the user runs nuage
+    project_root = Path(conf["project"]["path"])
+    env.ensure_env(project_root)
+    api_key = env.get_redmine_api_key()
+
+    if not api_key:
+        typer.secho("No API Key found in .env", fg=typer.colors.RED)
         raise typer.Exit(1)
 
-    # Fetch latest target
-    typer.echo(f"Fetching latest origin/{target}...")
-    subprocess.run(["git", "fetch", "origin", target], check=True)
+    # --- Discovery Mode: no ID given ---
+    if issue_id is None:
+        my_issues = redmine.get_my_open_issues(url, api_key)
 
-    # Step 2: Create a backup branch
-    backup_branch = f"{current_branch}-backup"
-    typer.echo(f"Creating safety backup branch: {backup_branch}")
-    subprocess.run(["git", "branch", "-f", backup_branch], check=True)
-
-    try:
-        # Step 3 & 4: Get commit messages for context
-        log_cmd = ["git", "log", f"origin/{target}..HEAD", "--format=* %s%n%b"]
-        log_result = subprocess.run(log_cmd, capture_output=True, text=True, check=True)
-        commit_messages = log_result.stdout.strip()
-
-        # Step 3: Soft Reset
-        typer.echo(f"Soft resetting to origin/{target} (squashing commits)...")
-        subprocess.run(["git", "reset", "--soft", f"origin/{target}"], check=True)
-
-        # Step 4: Commit
-        # We write the commit messages to a temporary file to use as a template
-        temp_msg_file = f".nuage_commit_template"
-        with open(temp_msg_file, "w") as f:
-            f.write("\n\n# --- Nuage Auto-Squash ---\n")
-            f.write("# Provide a summary for this landed feature.\n")
-            f.write("# The individual commit messages are below for reference:\n#\n")
-            for line in commit_messages.split('\n'):
-                f.write(f"# {line}\n")
-        
-        typer.secho("Opening editor for the final commit message...", fg="blue")
-        commit_cmd = ["git", "commit", "-t", temp_msg_file]
-        commit_run = subprocess.run(commit_cmd)
-        
-        if os.path.exists(temp_msg_file):
-            os.remove(temp_msg_file)
-            
-        if commit_run.returncode != 0:
-            typer.secho("Commit aborted. Restoring from backup...", fg="red")
-            subprocess.run(["git", "reset", "--hard", backup_branch], check=True)
+        if my_issues is None:
+            typer.echo("Could not connect to Redmine.")
             raise typer.Exit(1)
 
-        # Step 5: Push
-        typer.echo(f"Pushing to origin/{target}...")
-        push_cmd = ["git", "push", "origin", f"HEAD:{target}"]
-        subprocess.run(push_cmd, check=True)
-        
-        typer.secho(f"Successfully landed {current_branch} onto {target}!", fg="green", bold=True)
+        if not my_issues:
+            typer.echo("No open tasks assigned to you.")
+            return
 
-        # Checkout target and pull
-        subprocess.run(["git", "checkout", target], check=True)
-        subprocess.run(["git", "pull", "--rebase", "origin", target], check=True)
+        typer.secho(f"\n YOUR OPEN TASKS:", bold=True, underline=True)
+        for i, issue in enumerate(my_issues, 1):
+            status = issue.get("status", {}).get("name", "?")
+            typer.echo(f"  {i}. #{issue['id']} [{status}] {issue['subject']}")
 
-        # Step 6: Post-Land Cleanup
-        typer.echo(f"Cleaning up local branch {current_branch}...")
-        subprocess.run(["git", "branch", "-D", current_branch], check=True)
-        
-        # We can also clean up the backup branch since we succeeded
-        typer.echo(f"Cleaning up backup branch {backup_branch}...")
-        subprocess.run(["git", "branch", "-D", backup_branch], check=True)
+        choice = typer.prompt("\nEnter issue number to update (or 0 to cancel)", default="0")
+        try:
+            idx = int(choice)
+        except ValueError:
+            typer.secho("Invalid input.", fg="red")
+            raise typer.Exit(1)
 
-    except subprocess.CalledProcessError as e:
-        typer.secho(f"\nError during land process: {e}", fg="red")
-        typer.secho(f"Your original state is safely preserved in branch: {backup_branch}", fg="yellow")
-        typer.secho(f"To restore: git reset --hard {backup_branch}", fg="yellow")
+        if idx == 0:
+            return
+        if idx < 1 or idx > len(my_issues):
+            typer.secho("Out of range.", fg="red")
+            raise typer.Exit(1)
+
+        issue_id = my_issues[idx - 1]["id"]
+
+    # --- Status Transition ---
+    typer.echo(f"\n Fetching issue #{issue_id}...")
+    issue = redmine.get_issue(url, api_key, issue_id)
+    if issue is None:
+        typer.secho(f"[!] Could not fetch issue #{issue_id}.", fg=typer.colors.RED)
+        raise typer.Exit(1)
+
+    current_status = issue.get("status", {}).get("name", "Unknown")
+    typer.secho(f"\n Issue #{issue_id}: {issue['subject']}", bold=True)
+    typer.echo(f"  Current Status: {current_status}")
+
+    typer.secho("\n Fetching available statuses...", fg="blue")
+    statuses = redmine.get_allowed_statuses(url, api_key, issue_id)
+    if statuses is None:
+        typer.secho("[!] Could not fetch available statuses.", fg=typer.colors.RED)
+        raise typer.Exit(1)
+
+    if not statuses:
+        typer.secho("\n [!] No status transitions available for you on this issue.", fg=typer.colors.YELLOW)
+        typer.echo("     (You may lack permissions, or the Redmine workflow restricts it)")
+        raise typer.Exit(1)
+
+    typer.secho("\n Available Statuses:", bold=True)
+    for i, s in enumerate(statuses, 1):
+        typer.echo(f"  {i}. {s['name']}")
+
+    choice = typer.prompt("\nSelect new status number (or 0 to cancel)", default="0")
+    try:
+        idx = int(choice)
+    except ValueError:
+        typer.secho("Invalid input.", fg="red")
+        raise typer.Exit(1)
+
+    if idx == 0:
+        typer.echo("Cancelled.")
+        return
+    if idx < 1 or idx > len(statuses):
+        typer.secho("Out of range.", fg="red")
+        raise typer.Exit(1)
+
+    chosen = statuses[idx - 1]
+    typer.echo(f"\n Updating #{issue_id} to: {chosen['name']}...")
+    success = redmine.update_issue_status(url, api_key, issue_id, chosen["id"])
+
+    if success:
+        typer.secho(f"  ✓ Issue #{issue_id} updated to '{chosen['name']}'.", fg=typer.colors.GREEN, bold=True)
+    else:
+        typer.secho(f"  [!] Failed to update issue #{issue_id}. Check your permissions.", fg=typer.colors.RED)
         raise typer.Exit(1)
 
 if __name__ == "__main__":
