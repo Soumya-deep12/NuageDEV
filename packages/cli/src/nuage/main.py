@@ -23,7 +23,7 @@ def setup(path: str = "."):
         env_path = p_path / ".env"
         with open(env_path, "a") as f:
             f.write(f"\nREDMINE_API_KEY={key}\n")
-        typer.secho(f"  [✓] Saved API key securely to {env_path.name}", fg=typer.colors.GREEN)
+        typer.secho(f"  Saved API key securely to {env_path.name}", fg=typer.colors.GREEN)
 
     typer.echo(f"Nuage setup complete for {name}!")
 
@@ -179,107 +179,68 @@ def review_list(base: str = "main"):
 
 @app.command()
 def update(issue_id: int = typer.Argument(None)):
-    """Update the status of a Redmine issue"""
+    """Update Redmine issue status"""
+    # 1. Load credentials (Using the helper logic we discussed)
+    # import ipdb; ipdb.set_trace()
     cwd = Path.cwd()
-    env.ensure_env(cwd)
     conf = config.load_config(cwd)
-
     if not conf or "redmine" not in conf:
-        typer.secho("Redmine not configured for this project.", fg=typer.colors.RED)
+        typer.secho(" Redmine not configured.", fg="red")
         raise typer.Exit(1)
 
     url = conf["redmine"]["url"]
-
-    # Load .env from the project root, not from wherever the user runs nuage
     project_root = Path(conf["project"]["path"])
     env.ensure_env(project_root)
     api_key = env.get_redmine_api_key()
 
-    if not api_key:
-        typer.secho("No API Key found in .env", fg=typer.colors.RED)
-        raise typer.Exit(1)
-
-    # --- Discovery Mode: no ID given ---
+    # 2. Discovery Mode (If no ID provided)
     if issue_id is None:
         my_issues = redmine.get_my_open_issues(url, api_key)
-
-        if my_issues is None:
-            typer.echo("Could not connect to Redmine.")
-            raise typer.Exit(1)
-
         if not my_issues:
             typer.echo("No open tasks assigned to you.")
             return
 
         typer.secho(f"\n YOUR OPEN TASKS:", bold=True, underline=True)
         for i, issue in enumerate(my_issues, 1):
-            status = issue.get("status", {}).get("name", "?")
-            typer.echo(f"  {i}. #{issue['id']} [{status}] {issue['subject']}")
+            typer.echo(f"  {i}. #{issue['id']} [{issue['status']['name']}] {issue['subject']}")
 
-        choice = typer.prompt("\nEnter issue number to update (or 0 to cancel)", default="0")
-        try:
-            idx = int(choice)
-        except ValueError:
-            typer.secho("Invalid input.", fg="red")
-            raise typer.Exit(1)
+        choice = typer.prompt("\nEnter list number (0 to cancel)", default="0")
+        if choice == "0": return
+        issue_id = my_issues[int(choice) - 1]["id"]
 
-        if idx == 0:
-            return
-        if idx < 1 or idx > len(my_issues):
-            typer.secho("Out of range.", fg="red")
-            raise typer.Exit(1)
+    # 3. Manual Status Selection (BYPASSING ALLOWED_STATUSES)
+    manual_statuses = [
+        {"id": 1, "name": "New"},
+        {"id": 2, "name": "In Progress"},
+        {"id": 3, "name": "Resolved"},
+        {"id": 4, "name": "Feedback"},
+        {"id": 5, "name": "Closed"},
+        {"id": 6, "name": "Rejected"}
+    ]
 
-        issue_id = my_issues[idx - 1]["id"]
-
-    # --- Status Transition ---
-    typer.echo(f"\n Fetching issue #{issue_id}...")
-    issue = redmine.get_issue(url, api_key, issue_id)
-    if issue is None:
-        typer.secho(f"[!] Could not fetch issue #{issue_id}.", fg=typer.colors.RED)
-        raise typer.Exit(1)
-
-    current_status = issue.get("status", {}).get("name", "Unknown")
-    typer.secho(f"\n Issue #{issue_id}: {issue['subject']}", bold=True)
-    typer.echo(f"  Current Status: {current_status}")
-
-    typer.secho("\n Fetching available statuses...", fg="blue")
-    statuses = redmine.get_allowed_statuses(url, api_key, issue_id)
-    if statuses is None:
-        typer.secho("[!] Could not fetch available statuses.", fg=typer.colors.RED)
-        raise typer.Exit(1)
-
-    if not statuses:
-        typer.secho("\n [!] No status transitions available for you on this issue.", fg=typer.colors.YELLOW)
-        typer.echo("     (You may lack permissions, or the Redmine workflow restricts it)")
-        raise typer.Exit(1)
-
-    typer.secho("\n Available Statuses:", bold=True)
-    for i, s in enumerate(statuses, 1):
+    typer.secho(f"\n Updating Issue #{issue_id}", bold=True, fg="blue")
+    typer.echo(" Select New Status:")
+    for i, s in enumerate(manual_statuses, 1):
         typer.echo(f"  {i}. {s['name']}")
 
-    choice = typer.prompt("\nSelect new status number (or 0 to cancel)", default="0")
-    try:
-        idx = int(choice)
-    except ValueError:
-        typer.secho("Invalid input.", fg="red")
-        raise typer.Exit(1)
-
-    if idx == 0:
-        typer.echo("Cancelled.")
+    choice = typer.prompt("\nSelect status number (or 0 to cancel)", default="0")
+    if choice == "0": 
         return
-    if idx < 1 or idx > len(statuses):
-        typer.secho("Out of range.", fg="red")
-        raise typer.Exit(1)
+    
+    try:
+        chosen = manual_statuses[int(choice) - 1]
+    except (ValueError, IndexError):
+        typer.echo("Invalid selection.")
+        return
 
-    chosen = statuses[idx - 1]
-    typer.echo(f"\n Updating #{issue_id} to: {chosen['name']}...")
+    # 4. Direct PUT Request (Like your Curl command)
+    typer.echo(f" Sending update to Redmine...")
     success = redmine.update_issue_status(url, api_key, issue_id, chosen["id"])
 
     if success:
-        typer.secho(f"  ✓ Issue #{issue_id} updated to '{chosen['name']}'.", fg=typer.colors.GREEN, bold=True)
+        typer.secho(f" Success: Issue #{issue_id} updated to '{chosen['name']}'.", fg="green", bold=True)
     else:
-        typer.secho(f"  [!] Failed to update issue #{issue_id}. Check your permissions.", fg=typer.colors.RED)
-        raise typer.Exit(1)
-
+        typer.echo(f" Failed. Redmine accepted the request but the status was NOT changed.")
+    
 if __name__ == "__main__":
     app()

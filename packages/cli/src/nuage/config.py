@@ -15,9 +15,15 @@ def save_config(path: Path, project_name: str, editor: str, redmine_url: str = N
         config.write(f)
 
 def load_config(path: Path) -> configparser.ConfigParser | None:
-    config_path = path / CONFIG_FILE
-    if not config_path.exists():
-        return None
-    config = configparser.ConfigParser()
-    config.read(config_path)
-    return config if "project" in config else None
+    current_dir = path.resolve()
+    
+    # Traverse up the directory tree looking for the config file
+    while current_dir != current_dir.parent:
+        config_path = current_dir / CONFIG_FILE
+        if config_path.exists():
+            config = configparser.ConfigParser()
+            config.read(config_path)
+            return config if "project" in config else None
+        current_dir = current_dir.parent
+        
+    return None

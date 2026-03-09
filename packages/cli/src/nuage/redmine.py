@@ -70,7 +70,7 @@ def get_allowed_statuses(base_url: str, key: str, issue_id: int) -> list[dict] |
         return None
 
 def update_issue_status(base_url: str, key: str, issue_id: int, new_status_id: int) -> bool:
-    """Update the status of an issue. Returns True on success."""
+    """Update the status of an issue. Returns True only if Redmine actually applied the change."""
     from urllib.parse import urlparse
     parsed = urlparse(base_url)
     base_domain = f"{parsed.scheme}://{parsed.netloc}"
@@ -79,12 +79,25 @@ def update_issue_status(base_url: str, key: str, issue_id: int, new_status_id: i
         "X-Redmine-API-Key": key,
         "Content-Type": "application/json",
     }
-    payload = {"issue": {"status_id": new_status_id}}
+    done_ratio = 50 if new_status_id == 2 else (100 if new_status_id == 3 else 0)
+    payload = {
+        "issue": {
+            "status_id": new_status_id,
+            "notes": "Updating status via Nuage CLI tool.",
+            "done_ratio": done_ratio
+        }
+    }
     try:
         with httpx.Client(timeout=15, verify=False) as client:
             response = client.put(url, headers=headers, json=payload)
             response.raise_for_status()
-            return True
+
+            # Verify the change actually took effect — Redmine silently ignores
+            # status changes that violate workflow rules, still returning 204.
+            verify = client.get(url, headers={"X-Redmine-API-Key": key})
+            verify.raise_for_status()
+            actual_status_id = verify.json().get("issue", {}).get("status", {}).get("id")
+            return actual_status_id == new_status_id
     except Exception as e:
         print(f"Redmine Error: {e}")
         return False
