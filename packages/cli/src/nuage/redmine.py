@@ -79,14 +79,7 @@ def update_issue_status(base_url: str, key: str, issue_id: int, new_status_id: i
         "X-Redmine-API-Key": key,
         "Content-Type": "application/json",
     }
-    done_ratio = 50 if new_status_id == 2 else (100 if new_status_id == 3 else 0)
-    payload = {
-        "issue": {
-            "status_id": new_status_id,
-            "notes": "Updating status via Nuage CLI tool.",
-            "done_ratio": done_ratio
-        }
-    }
+    payload = {"issue": {"status_id": new_status_id}}
     try:
         with httpx.Client(timeout=15, verify=False) as client:
             response = client.put(url, headers=headers, json=payload)
