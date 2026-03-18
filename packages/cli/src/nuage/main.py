@@ -39,17 +39,15 @@ def go():
     launcher.start_editor(conf["environment"]["editor"], p_path)
     launcher.start_tmux(conf["project"]["name"], p_path)
 
-@app.command()
-def redmine_items():
-    """List project tasks from Redmine."""
+def get_redmine_credentials():
+    """Helper to load config, url, and API key safely."""
     cwd = Path.cwd()
     conf = config.load_config(cwd)
 
     if not conf or "redmine" not in conf:
-        typer.echo("Redmine not configured for this project.")
-        return
+        typer.secho("Redmine not configured for this project.", fg=typer.colors.RED)
+        raise typer.Exit(1)
 
-    # Load .env from the project root, not from wherever the user runs nuage
     project_root = Path(conf["project"]["path"])
     env.ensure_env(project_root)
 
@@ -57,8 +55,15 @@ def redmine_items():
     api_key = env.get_redmine_api_key()
 
     if not api_key:
-        typer.secho("Redmine URL found but no API Key found in .env", fg=typer.colors.RED)
-        return
+        typer.secho("Redmine URL found but no API Key found in .env.", fg=typer.colors.RED)
+        raise typer.Exit(1)
+
+    return conf, url, api_key
+
+@app.command()
+def redmine_items():
+    """List project tasks from Redmine."""
+    conf, url, api_key = get_redmine_credentials()
 
     overdue = redmine.get_overdue_issues(url, api_key)
     today = redmine.get_today_issues(url, api_key)
@@ -76,23 +81,7 @@ def redmine_items():
 @app.command()
 def redmine_list():
     """List all project tasks for all team members."""
-    cwd = Path.cwd()
-    conf = config.load_config(cwd)
-
-    if not conf or "redmine" not in conf:
-        typer.echo("Redmine not configured for this project.")
-        return
-
-    # Load .env from the project root, not from wherever the user runs nuage
-    project_root = Path(conf["project"]["path"])
-    env.ensure_env(project_root)
-
-    url = conf["redmine"]["url"]
-    api_key = env.get_redmine_api_key()
-
-    if not api_key:
-        typer.secho("Redmine URL found but no API Key found in .env", fg=typer.colors.RED)
-        return
+    conf, url, api_key = get_redmine_credentials()
 
     all_issues = redmine.get_all_issues(url, api_key)
 
@@ -180,18 +169,7 @@ def review_list(base: str = "main"):
 @app.command()
 def update(issue_id: int = typer.Argument(None)):
     """Update Redmine issue status"""
-    # 1. Load credentials (Using the helper logic we discussed)
-    # import ipdb; ipdb.set_trace()
-    cwd = Path.cwd()
-    conf = config.load_config(cwd)
-    if not conf or "redmine" not in conf:
-        typer.secho(" Redmine not configured.", fg="red")
-        raise typer.Exit(1)
-
-    url = conf["redmine"]["url"]
-    project_root = Path(conf["project"]["path"])
-    env.ensure_env(project_root)
-    api_key = env.get_redmine_api_key()
+    conf, url, api_key = get_redmine_credentials()
 
     # 2. Discovery Mode (If no ID provided)
     if issue_id is None:
